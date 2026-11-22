@@ -45,11 +45,38 @@ to a prefix other than `/usr` or `/usr/local` to ensure the configuration file
 ## Custom build
 
 This fork replaces the solid-color background with a blurred wallpaper and a
-single centered password field rendered with Cairo. It reads
+password field rendered with Cairo. It reads
 `$XDG_CONFIG_HOME/waylock/theme.conf` by default; see
 [examples/theme.conf](examples/theme.conf) and
 [examples/matugen-waylock.conf](examples/matugen-waylock.conf) for the format
 and Matugen integration.
+
+The password field can be resized, rounded, and moved using an anchor plus
+pixel offsets:
+
+```
+box_width = 190
+box_height = 34
+border_radius = 0
+box_anchor = center
+box_x = 0
+box_y = 0
+fade_ms = 250
+```
+
+Additional text or image widgets can be placed anywhere using the same
+anchor/offset scheme:
+
+```
+[widget.hostname]
+type = text
+text = legion
+anchor = top-center
+x = 0
+y = 40
+font_size = 18
+color = #e4e2e4
+```
 
 The build links against the host `libpam` rather than the copy in the
 development shell, because the latter expects the NixOS helper path
@@ -70,14 +97,15 @@ devenv shell -- zig build -Doptimize=ReleaseSafe --prefix ~/.local install
 See the `waylock(1)` man page or the output of `waylock -h` for an overview
 of the command line options.
 
-Run the waylock executable to lock the session. All monitors will be blanked
-with the `-init-color`. Typing causes the color to change to the
-`-input-color`. `Esc` or `Ctrl-U` clears all current input, while `backspace`
-deletes the last UTF-8 codepoint.
+Run the waylock executable to lock the session. Each monitor shows the
+configured background and password field. Typing animates the field outline
+to the primary color and adds a fading dot for each codepoint. `Esc` or
+`Ctrl-U` clears all current input, while `backspace` deletes the last UTF-8
+codepoint.
 
 To unlock the session, type your password and press `Enter`. If the password
-is correct, waylock will unlock the session and exit. Otherwise, the color
-will change to the `-fail-color` and you may try again.
+is correct, waylock will unlock the session and exit. Otherwise, the field
+outline animates to the error color and you may try again.
 
 In order to automatically run waylock after a certain amount of time with no
 input or before sleep, the [swayidle](https://github.com/swaywm/swayidle)

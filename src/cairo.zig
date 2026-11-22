@@ -13,6 +13,19 @@ pub const OPERATOR_SOURCE: c_int = 1;
 pub const OPERATOR_OVER: c_int = 2;
 pub const FILTER_BILINEAR: c_int = 4;
 
+pub const FONT_SLANT_NORMAL: c_int = 0;
+pub const FONT_WEIGHT_NORMAL: c_int = 0;
+pub const FONT_WEIGHT_BOLD: c_int = 1;
+
+pub const TextExtents = extern struct {
+    x_bearing: f64,
+    y_bearing: f64,
+    width: f64,
+    height: f64,
+    x_advance: f64,
+    y_advance: f64,
+};
+
 pub extern fn cairo_create(target: *cairo_surface_t) ?*cairo_t;
 pub extern fn cairo_destroy(cr: *cairo_t) void;
 
@@ -27,6 +40,13 @@ pub extern fn cairo_set_source_surface(cr: *cairo_t, surface: *cairo_surface_t, 
 pub extern fn cairo_get_source(cr: *cairo_t) ?*cairo_pattern_t;
 pub extern fn cairo_pattern_set_filter(pattern: *cairo_pattern_t, filter: c_int) void;
 pub extern fn cairo_paint(cr: *cairo_t) void;
+pub extern fn cairo_paint_with_alpha(cr: *cairo_t, alpha: f64) void;
+
+pub extern fn cairo_move_to(cr: *cairo_t, x: f64, y: f64) void;
+pub extern fn cairo_select_font_face(cr: *cairo_t, family: [*:0]const u8, slant: c_int, weight: c_int) void;
+pub extern fn cairo_set_font_size(cr: *cairo_t, size: f64) void;
+pub extern fn cairo_show_text(cr: *cairo_t, utf8: [*:0]const u8) void;
+pub extern fn cairo_text_extents(cr: *cairo_t, utf8: [*:0]const u8, extents: *TextExtents) void;
 
 pub extern fn cairo_set_line_width(cr: *cairo_t, width: f64) void;
 pub extern fn cairo_rectangle(cr: *cairo_t, x: f64, y: f64, width: f64, height: f64) void;
