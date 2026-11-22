@@ -46,7 +46,7 @@ pub const Options = struct {
     ready_fd: ?posix.fd_t = null,
     ignore_empty_password: bool,
     config_path: ?[]const u8 = null,
-    pam_service: []const u8 = "swaylock",
+    pam_service: []const u8 = "waylock",
     init_color: u24 = 0x002b36,
     input_color: u24 = 0x6c71c4,
     fail_color: u24 = 0xdc322f,

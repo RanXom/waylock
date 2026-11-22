@@ -82,9 +82,9 @@ The build links against the host `libpam` rather than the copy in the
 development shell, because the latter expects the NixOS helper path
 `/run/wrappers/bin/unix_chkpwd`. The default lookup directory is
 `/usr/lib64`; use `-Dpam-lib-dir=<dir>` if your distribution installs
-`libpam.so` elsewhere. Authentication uses the `swaylock` PAM service by
-default, since many distributions already ship `/etc/pam.d/swaylock`. Pass
-`-pam-service waylock` to use the service installed by this project instead.
+`libpam.so` elsewhere. Authentication uses the `waylock` PAM service by
+default. Install [pam.d/waylock](pam.d/waylock) as `/etc/pam.d/waylock`, or
+pass `-pam-service <name>` to use another service.
 
 Build and install with:
 

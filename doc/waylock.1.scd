@@ -51,7 +51,7 @@ unlocked.
 	a complete example.
 
 *-pam-service* _name_
-	Use the named PAM service. (default: swaylock)
+	Use the named PAM service. (default: waylock)
 
 *-init-color* _0xRRGGBB_
 	Set the fallback background color used when no theme file is loaded.

@@ -23,7 +23,7 @@ const usage =
     \\  -ready-fd <fd>             Write a newline to fd after locking.
     \\  -ignore-empty-password     Do not validate an empty password.
     \\  -config <path>             Read theme and geometry from <path>.
-    \\  -pam-service <name>        Use the named PAM service (default: swaylock).
+    \\  -pam-service <name>        Use the named PAM service (default: waylock).
     \\
     \\  -init-color 0xRRGGBB       Set the fallback initial color.
     \\  -input-color 0xRRGGBB      Set the fallback input color.
@@ -97,7 +97,7 @@ pub fn main(init: process.Init) error{ OutOfMemory, Unexpected }!void {
         .fork_on_lock = result.flags.@"fork-on-lock",
         .ignore_empty_password = result.flags.@"ignore-empty-password",
         .config_path = resolveConfigPath(arena, init.environ_map, result.flags.config),
-        .pam_service = result.flags.@"pam-service" orelse "swaylock",
+        .pam_service = result.flags.@"pam-service" orelse "waylock",
     };
     if (result.flags.@"ready-fd") |raw| {
         options.ready_fd = std.fmt.parseInt(posix.fd_t, raw, 10) catch {
