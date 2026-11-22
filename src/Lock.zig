@@ -84,13 +84,11 @@ dot_count: usize = 0,
 password_dots: usize = 0,
 last_tick: i64 = 0,
 
-screen_fade: f64 = 1.0,
-ui_alpha: f64 = 0.0,
+fade_progress: f64 = 0.0,
 fade_direction: FadeDirection = .none,
 fade_start: i64 = 0,
 fade_duration_ms: i64 = 250,
-fade_from_screen: f64 = 1.0,
-fade_from_ui: f64 = 0.0,
+fade_from_progress: f64 = 0.0,
 pending_unlock: bool = false,
 fade_out_done_at: i64 = 0,
 
@@ -100,6 +98,7 @@ ignore_empty_password: bool,
 
 theme: Theme,
 background: ?*cairo.cairo_surface_t = null,
+transition: ?*cairo.cairo_surface_t = null,
 
 pollfds: [2]posix.pollfd,
 
@@ -145,6 +144,7 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
 
     lock.initUi();
     lock.loadBackground();
+    lock.loadTransition();
     lock.last_tick = lock.nowMs();
     lock.fade_duration_ms = lock.theme.fade_ms;
 
@@ -311,6 +311,7 @@ fn deinit(lock: *Lock) void {
 
     if (lock.shm) |shm| shm.destroy();
     if (lock.background) |background| cairo.cairo_surface_destroy(background);
+    if (lock.transition) |transition| cairo.cairo_surface_destroy(transition);
     lock.theme.deinit(lock.gpa);
 
     lock.display.disconnect();
@@ -482,16 +483,14 @@ fn send_password_to_auth(lock: *Lock) !void {
 
 fn startFadeIn(lock: *Lock) void {
     if (lock.fade_duration_ms <= 0) {
-        lock.screen_fade = 0.0;
-        lock.ui_alpha = 1.0;
+        lock.fade_progress = 1.0;
         lock.redraw();
         return;
     }
 
     lock.fade_direction = .in;
     lock.fade_start = lock.nowMs();
-    lock.fade_from_screen = lock.screen_fade;
-    lock.fade_from_ui = lock.ui_alpha;
+    lock.fade_from_progress = lock.fade_progress;
 }
 
 fn startFadeOut(lock: *Lock) void {
@@ -501,8 +500,7 @@ fn startFadeOut(lock: *Lock) void {
     lock.fade_out_done_at = 0;
 
     if (lock.fade_duration_ms <= 0) {
-        lock.screen_fade = 1.0;
-        lock.ui_alpha = 0.0;
+        lock.fade_progress = 0.0;
         lock.fade_direction = .none;
         lock.fade_out_done_at = lock.nowMs();
         lock.redraw();
@@ -511,8 +509,7 @@ fn startFadeOut(lock: *Lock) void {
 
     lock.fade_direction = .out;
     lock.fade_start = lock.nowMs();
-    lock.fade_from_screen = lock.screen_fade;
-    lock.fade_from_ui = lock.ui_alpha;
+    lock.fade_from_progress = lock.fade_progress;
 }
 
 fn finishUnlock(lock: *Lock) void {
@@ -549,6 +546,24 @@ fn loadBackground(lock: *Lock) void {
         return;
     }
     lock.background = surface;
+}
+
+fn loadTransition(lock: *Lock) void {
+    const path = lock.theme.transition_image orelse return;
+
+    const path_z = lock.gpa.dupeSentinel(u8, path, 0) catch return;
+    defer lock.gpa.free(path_z);
+
+    const surface = cairo.cairo_image_surface_create_from_png(path_z.ptr) orelse {
+        log.warn("failed to load transition image '{s}'", .{path});
+        return;
+    };
+    if (cairo.cairo_surface_status(surface) != cairo.STATUS_SUCCESS) {
+        log.warn("failed to load transition image '{s}'", .{path});
+        cairo.cairo_surface_destroy(surface);
+        return;
+    }
+    lock.transition = surface;
 }
 
 fn setUiState(lock: *Lock, state: UiState) void {
@@ -603,12 +618,12 @@ fn tick(lock: *Lock) bool {
 
         switch (lock.fade_direction) {
             .in => {
-                lock.screen_fade = lock.fade_from_screen + (0.0 - lock.fade_from_screen) * eased;
-                lock.ui_alpha = lock.fade_from_ui + (1.0 - lock.fade_from_ui) * eased;
+                lock.fade_progress = lock.fade_from_progress +
+                    (1.0 - lock.fade_from_progress) * eased;
             },
             .out => {
-                lock.screen_fade = lock.fade_from_screen + (1.0 - lock.fade_from_screen) * eased;
-                lock.ui_alpha = lock.fade_from_ui + (0.0 - lock.fade_from_ui) * eased;
+                lock.fade_progress = lock.fade_from_progress +
+                    (0.0 - lock.fade_from_progress) * eased;
             },
             .none => {},
         }
@@ -704,8 +719,8 @@ pub fn render(lock: *Lock, cr: *cairo.cairo_t, width: f64, height: f64) void {
         .border_width = lock.ui_current_width,
         .dots = &lock.dots,
         .dot_count = lock.dot_count,
-        .ui_alpha = lock.ui_alpha,
-        .screen_fade = lock.screen_fade,
+        .progress = lock.fade_progress,
+        .transition = lock.transition,
     });
 }
 

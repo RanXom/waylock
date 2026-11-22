@@ -12,8 +12,10 @@ pub const Params = struct {
     border_width: f64,
     dots: []const f32,
     dot_count: usize,
-    ui_alpha: f64,
-    screen_fade: f64,
+    /// 0 = fully transition image, 1 = fully lock screen.
+    progress: f64,
+    /// Desktop snapshot captured just before locking, if available.
+    transition: ?*cairo.cairo_surface_t,
 };
 
 pub fn render(
@@ -22,27 +24,19 @@ pub fn render(
     cr: *cairo.cairo_t,
     params: Params,
 ) void {
-    drawBackground(theme, background, cr, params.width, params.height);
-
-    drawBox(theme, cr, params);
-    drawWidgets(theme, cr, params.width, params.height, params.ui_alpha);
-
-    // Fade the whole lock screen from (or to) the theme background. This hides
-    // the transition into and out of the compositor's session lock surface.
-    if (params.screen_fade > 0.001) {
-        cairo.cairo_set_source_rgba(
-            cr,
-            theme.background_color.r,
-            theme.background_color.g,
-            theme.background_color.b,
-            params.screen_fade,
-        );
-        cairo.cairo_paint(cr);
+    if (params.transition) |snapshot| {
+        drawImageFill(snapshot, cr, params.width, params.height, 1.0);
+        drawBackground(theme, background, cr, params.width, params.height, params.progress);
+    } else {
+        // Without a snapshot, fade only the UI over the blurred wallpaper.
+        drawBackground(theme, background, cr, params.width, params.height, 1.0);
     }
+
+    drawBox(theme, cr, params, params.progress);
+    drawWidgets(theme, cr, params.width, params.height, params.progress);
 }
 
-fn drawBox(theme: *const Theme, cr: *cairo.cairo_t, params: Params) void {
-    const alpha = params.ui_alpha;
+fn drawBox(theme: *const Theme, cr: *cairo.cairo_t, params: Params, alpha: f64) void {
     if (alpha <= 0.001) return;
 
     const box_w = theme.box_width;
@@ -99,17 +93,17 @@ fn drawBox(theme: *const Theme, cr: *cairo.cairo_t, params: Params) void {
         cairo.cairo_stroke(cr);
     }
 
-    drawDots(theme, cr, params, x, y, box_w, box_h);
+    drawDots(theme, cr, params, x, y, box_w, box_h, alpha);
 }
 
-fn drawWidgets(theme: *const Theme, cr: *cairo.cairo_t, width: f64, height: f64, ui_alpha: f64) void {
+fn drawWidgets(theme: *const Theme, cr: *cairo.cairo_t, width: f64, height: f64, alpha: f64) void {
     for (theme.widgets[0..theme.widget_count]) |*widget| {
-        const alpha = widget.opacity * ui_alpha;
-        if (alpha <= 0.001) continue;
+        const widget_alpha = widget.opacity * alpha;
+        if (widget_alpha <= 0.001) continue;
 
         switch (widget.kind) {
-            .text => drawTextWidget(theme, widget, cr, width, height, alpha),
-            .image => drawImageWidget(widget, cr, width, height, alpha),
+            .text => drawTextWidget(theme, widget, cr, width, height, widget_alpha),
+            .image => drawImageWidget(widget, cr, width, height, widget_alpha),
         }
     }
 }
@@ -207,14 +201,41 @@ fn anchoredPosition(
     };
 }
 
+fn drawImageFill(
+    surface: *cairo.cairo_surface_t,
+    cr: *cairo.cairo_t,
+    width: f64,
+    height: f64,
+    alpha: f64,
+) void {
+    const image_w = cairo.cairo_image_surface_get_width(surface);
+    const image_h = cairo.cairo_image_surface_get_height(surface);
+    if (image_w <= 0 or image_h <= 0) return;
+
+    const iw: f64 = @floatFromInt(image_w);
+    const ih: f64 = @floatFromInt(image_h);
+    const scale = @max(width / iw, height / ih);
+
+    cairo.cairo_save(cr);
+    cairo.cairo_translate(cr, (width - iw * scale) / 2.0, (height - ih * scale) / 2.0);
+    cairo.cairo_scale(cr, scale, scale);
+    cairo.cairo_set_source_surface(cr, surface, 0.0, 0.0);
+    if (cairo.cairo_get_source(cr)) |pattern| {
+        cairo.cairo_pattern_set_filter(pattern, cairo.FILTER_BILINEAR);
+    }
+    cairo.cairo_paint_with_alpha(cr, alpha);
+    cairo.cairo_restore(cr);
+}
+
 fn drawBackground(
     theme: *const Theme,
     background: ?*cairo.cairo_surface_t,
     cr: *cairo.cairo_t,
     width: f64,
     height: f64,
+    alpha: f64,
 ) void {
-    cairo.cairo_set_operator(cr, cairo.OPERATOR_SOURCE);
+    if (alpha <= 0.001) return;
 
     if (background) |image| {
         const image_w = cairo.cairo_image_surface_get_width(image);
@@ -231,10 +252,8 @@ fn drawBackground(
             if (cairo.cairo_get_source(cr)) |pattern| {
                 cairo.cairo_pattern_set_filter(pattern, cairo.FILTER_BILINEAR);
             }
-            cairo.cairo_paint(cr);
+            cairo.cairo_paint_with_alpha(cr, alpha);
             cairo.cairo_restore(cr);
-
-            cairo.cairo_set_operator(cr, cairo.OPERATOR_OVER);
             return;
         }
     }
@@ -244,10 +263,9 @@ fn drawBackground(
         theme.background_color.r,
         theme.background_color.g,
         theme.background_color.b,
-        1.0,
+        alpha,
     );
     cairo.cairo_paint(cr);
-    cairo.cairo_set_operator(cr, cairo.OPERATOR_OVER);
 }
 
 fn drawDots(
@@ -258,6 +276,7 @@ fn drawDots(
     y: f64,
     box_w: f64,
     box_h: f64,
+    alpha: f64,
 ) void {
     const n = @min(params.dot_count, params.dots.len);
     if (n == 0) return;
@@ -275,14 +294,14 @@ fn drawDots(
     const cy = y + box_h / 2.0;
 
     for (0..n) |i| {
-        const alpha: f64 = @floatCast(params.dots[i]);
-        if (alpha <= 0.001) continue;
+        const dot_alpha: f64 = @floatCast(params.dots[i]);
+        if (dot_alpha <= 0.001) continue;
         cairo.cairo_set_source_rgba(
             cr,
             theme.text_color.r,
             theme.text_color.g,
             theme.text_color.b,
-            theme.text_color.a * alpha * params.ui_alpha,
+            theme.text_color.a * dot_alpha * alpha,
         );
         cairo.cairo_arc(cr, x0 + @as(f64, @floatFromInt(i)) * spacing, cy, radius, 0.0, 2.0 * std.math.pi);
         cairo.cairo_fill(cr);

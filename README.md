@@ -64,6 +64,19 @@ box_y = 0
 fade_ms = 250
 ```
 
+For a crossfade from the desktop, capture a snapshot immediately before
+locking and point `transition_image` at it:
+
+```
+transition="${XDG_CACHE_HOME:-$HOME/.cache}/waylock-transition.png"
+grim "$transition" && waylock
+```
+
+[examples/lock-session](examples/lock-session) captures the snapshot and
+removes it when the locker exits, so a later manual launch cannot reuse a
+stale desktop. Without a snapshot, only the UI fades over the blurred
+wallpaper.
+
 Additional text or image widgets can be placed anywhere using the same
 anchor/offset scheme:
 
