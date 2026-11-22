@@ -618,11 +618,13 @@ fn tick(lock: *Lock) bool {
     }
 
     // Keep the final faded-out frame on screen briefly before asking the
-    // compositor to unlock, so the transition does not pop.
+    // compositor to unlock, so the transition does not pop. When the fade is
+    // disabled, unlock immediately instead.
+    const fade_hold_ms: i64 = if (lock.fade_duration_ms == 0) 0 else 80;
     if (lock.pending_unlock and
         lock.fade_direction == .none and
         lock.fade_out_done_at != 0 and
-        now >= lock.fade_out_done_at + 80)
+        now >= lock.fade_out_done_at + fade_hold_ms)
     {
         lock.finishUnlock();
         return false;
