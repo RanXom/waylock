@@ -98,6 +98,7 @@ pub fn main(init: process.Init) error{ OutOfMemory, Unexpected }!void {
         .ignore_empty_password = result.flags.@"ignore-empty-password",
         .config_path = resolveConfigPath(arena, init.environ_map, result.flags.config),
         .pam_service = result.flags.@"pam-service" orelse "waylock",
+        .compositor_fade = init.environ_map.get("SWAYFX_SESSION_LOCK_XRAY") != null,
     };
     if (result.flags.@"ready-fd") |raw| {
         options.ready_fd = std.fmt.parseInt(posix.fd_t, raw, 10) catch {

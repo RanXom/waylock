@@ -3,15 +3,6 @@
 # installed session locker (swaylock or gtklock).
 set -u
 
-# Capture the current desktop so waylock can crossfade from it. The
-# snapshot is removed when the locker exits so it cannot become stale.
-transition="${XDG_CACHE_HOME:-$HOME/.cache}/waylock-transition.png"
-if command -v grim >/dev/null 2>&1; then
-    mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}" 2>/dev/null || true
-    grim "$transition" >/dev/null 2>&1 || rm -f "$transition"
-fi
-trap 'rm -f "$transition"' EXIT
-
 for locker in waylock swaylock gtklock; do
     command -v "$locker" >/dev/null 2>&1 || continue
 

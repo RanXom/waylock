@@ -47,6 +47,7 @@ pub const Options = struct {
     ignore_empty_password: bool,
     config_path: ?[]const u8 = null,
     pam_service: []const u8 = "waylock",
+    compositor_fade: bool = false,
     init_color: u24 = 0x002b36,
     input_color: u24 = 0x6c71c4,
     fail_color: u24 = 0xdc322f,
@@ -98,7 +99,7 @@ ignore_empty_password: bool,
 
 theme: Theme,
 background: ?*cairo.cairo_surface_t = null,
-transition: ?*cairo.cairo_surface_t = null,
+compositor_fade: bool = false,
 
 pollfds: [2]posix.pollfd,
 
@@ -141,10 +142,10 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
         lock.theme.primary_color = rgbToRgba(options.input_color);
         lock.theme.error_color = rgbToRgba(options.fail_color);
     }
+    lock.compositor_fade = lock.theme.compositor_fade orelse options.compositor_fade;
 
     lock.initUi();
     lock.loadBackground();
-    lock.loadTransition();
     lock.last_tick = lock.nowMs();
     lock.fade_duration_ms = lock.theme.fade_ms;
 
@@ -311,7 +312,6 @@ fn deinit(lock: *Lock) void {
 
     if (lock.shm) |shm| shm.destroy();
     if (lock.background) |background| cairo.cairo_surface_destroy(background);
-    if (lock.transition) |transition| cairo.cairo_surface_destroy(transition);
     lock.theme.deinit(lock.gpa);
 
     lock.display.disconnect();
@@ -548,24 +548,6 @@ fn loadBackground(lock: *Lock) void {
     lock.background = surface;
 }
 
-fn loadTransition(lock: *Lock) void {
-    const path = lock.theme.transition_image orelse return;
-
-    const path_z = lock.gpa.dupeSentinel(u8, path, 0) catch return;
-    defer lock.gpa.free(path_z);
-
-    const surface = cairo.cairo_image_surface_create_from_png(path_z.ptr) orelse {
-        log.warn("failed to load transition image '{s}'", .{path});
-        return;
-    };
-    if (cairo.cairo_surface_status(surface) != cairo.STATUS_SUCCESS) {
-        log.warn("failed to load transition image '{s}'", .{path});
-        cairo.cairo_surface_destroy(surface);
-        return;
-    }
-    lock.transition = surface;
-}
-
 fn setUiState(lock: *Lock, state: UiState) void {
     if (lock.ui_state == state) return;
 
@@ -720,7 +702,7 @@ pub fn render(lock: *Lock, cr: *cairo.cairo_t, width: f64, height: f64) void {
         .dots = &lock.dots,
         .dot_count = lock.dot_count,
         .progress = lock.fade_progress,
-        .transition = lock.transition,
+        .compositor_fade = lock.compositor_fade,
     });
 }
 

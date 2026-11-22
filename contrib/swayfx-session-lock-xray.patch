@@ -1,0 +1,166 @@
+diff -ruN '--exclude=.git' a/include/sway/commands.h b/include/sway/commands.h
+--- a/include/sway/commands.h	2026-08-05 10:15:37.000000000 +0530
++++ b/include/sway/commands.h	2026-11-22 13:06:38.028817126 +0530
+@@ -166,6 +166,7 @@
+ sway_cmd cmd_inhibit_idle;
+ sway_cmd cmd_input;
+ sway_cmd cmd_seat;
++sway_cmd cmd_session_lock_xray;
+ sway_cmd cmd_ipc;
+ sway_cmd cmd_kill;
+ sway_cmd cmd_layer_effects;
+diff -ruN '--exclude=.git' a/include/sway/config.h b/include/sway/config.h
+--- a/include/sway/config.h	2026-08-05 10:15:37.000000000 +0530
++++ b/include/sway/config.h	2026-11-22 13:06:38.028817126 +0530
+@@ -502,6 +502,7 @@
+ 
+ 	bool blur_enabled;
+ 	bool blur_xray;
++	bool session_lock_xray;
+ 	struct blur_data blur_data;
+ 
+ 	bool shadow_enabled;
+diff -ruN '--exclude=.git' a/include/sway/lock.h b/include/sway/lock.h
+--- a/include/sway/lock.h	2026-08-05 10:15:37.000000000 +0530
++++ b/include/sway/lock.h	2026-11-22 13:06:54.232094308 +0530
+@@ -2,5 +2,6 @@
+ #define _SWAY_LOCK_H
+ 
+ void arrange_locks(void);
++void sway_session_lock_update_background(void);
+ 
+ #endif
+diff -ruN '--exclude=.git' a/sway/commands/session_lock_xray.c b/sway/commands/session_lock_xray.c
+--- a/sway/commands/session_lock_xray.c	1970-01-01 05:30:00.000000000 +0530
++++ b/sway/commands/session_lock_xray.c	2026-11-22 13:06:54.232094308 +0530
+@@ -0,0 +1,26 @@
++#include <stdlib.h>
++#include "sway/commands.h"
++#include "sway/config.h"
++#include "sway/lock.h"
++#include "util.h"
++
++struct cmd_results *cmd_session_lock_xray(int argc, char **argv) {
++	struct cmd_results *error =
++		checkarg(argc, "session_lock_xray", EXPECTED_AT_LEAST, 1);
++	if (error) {
++		return error;
++	}
++
++	config->session_lock_xray =
++		parse_boolean(argv[0], config->session_lock_xray);
++
++	if (config->session_lock_xray) {
++		setenv("SWAYFX_SESSION_LOCK_XRAY", "1", 1);
++	} else {
++		unsetenv("SWAYFX_SESSION_LOCK_XRAY");
++	}
++
++	sway_session_lock_update_background();
++
++	return cmd_results_new(CMD_SUCCESS, NULL);
++}
+diff -ruN '--exclude=.git' a/sway/commands.c b/sway/commands.c
+--- a/sway/commands.c	2026-08-05 10:15:37.000000000 +0530
++++ b/sway/commands.c	2026-11-22 13:06:38.028817126 +0530
+@@ -97,6 +97,7 @@
+ 	{ "output", cmd_output },
+ 	{ "popup_during_fullscreen", cmd_popup_during_fullscreen },
+ 	{ "seat", cmd_seat },
++	{ "session_lock_xray", cmd_session_lock_xray },
+ 	{ "set", cmd_set },
+ 	{ "shadow_blur_radius", cmd_shadow_blur_radius },
+ 	{ "shadow_color", cmd_shadow_color },
+diff -ruN '--exclude=.git' a/sway/config.c b/sway/config.c
+--- a/sway/config.c	2026-08-05 10:15:37.000000000 +0530
++++ b/sway/config.c	2026-11-22 13:06:38.028817126 +0530
+@@ -362,6 +362,8 @@
+ 
+ 	config->blur_enabled = false;
+ 	config->blur_xray = false;
++	config->session_lock_xray = false;
++	unsetenv("SWAYFX_SESSION_LOCK_XRAY");
+ 	config->blur_data = blur_data_get_default();
+ 
+ 	config->shadow_enabled = false;
+diff -ruN '--exclude=.git' a/sway/lock.c b/sway/lock.c
+--- a/sway/lock.c	2026-08-05 10:15:37.000000000 +0530
++++ b/sway/lock.c	2026-11-22 13:06:54.232094308 +0530
+@@ -2,6 +2,7 @@
+ #include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_session_lock_v1.h>
+ #include "log.h"
++#include "sway/config.h"
+ #include "sway/input/cursor.h"
+ #include "sway/input/keyboard.h"
+ #include "sway/input/seat.h"
+@@ -89,6 +90,23 @@
+ 	}
+ }
+ 
++void sway_session_lock_update_background(void) {
++	if (!server.session_lock.lock) {
++		return;
++	}
++
++	struct sway_session_lock *lock = server.session_lock.lock;
++	struct sway_session_lock_output *output;
++	wl_list_for_each(output, &lock->outputs, link) {
++		wlr_scene_rect_set_color(output->background, (float[4]){
++			lock->abandoned ? 1.f : 0.f,
++			0.f,
++			0.f,
++			(lock->abandoned || !config->session_lock_xray) ? 1.f : 0.f,
++		});
++	}
++}
++
+ void arrange_locks(void) {
+ 	if (server.session_lock.lock == NULL) {
+ 		return;
+@@ -129,8 +147,7 @@
+ 	lock_output_reconfigure(lock_output);
+ }
+ 
+-static void sway_session_lock_output_destroy(struct sway_session_lock_output *output) {
+-	if (output->surface) {
++static void sway_session_lock_output_destroy(struct sway_session_lock_output *output) {	if (output->surface) {
+ 		refocus_output(output);
+ 		wl_list_remove(&output->surface_destroy.link);
+ 		wl_list_remove(&output->surface_map.link);
+@@ -167,7 +184,7 @@
+ 		lock->abandoned ? 1.f : 0.f,
+ 		0.f,
+ 		0.f,
+-		1.f,
++		(lock->abandoned || !config->session_lock_xray) ? 1.f : 0.f,
+ 	});
+ 	if (!background) {
+ 		sway_log(SWAY_ERROR, "failed to allocate a session lock output scene background");
+diff -ruN '--exclude=.git' a/sway/meson.build b/sway/meson.build
+--- a/sway/meson.build	2026-08-05 10:15:37.000000000 +0530
++++ b/sway/meson.build	2026-11-22 13:06:38.028817126 +0530
+@@ -119,6 +119,7 @@
+ 	'commands/seat/pointer_constraint.c',
+ 	'commands/seat/shortcuts_inhibitor.c',
+ 	'commands/seat/xcursor_theme.c',
++	'commands/session_lock_xray.c',
+ 	'commands/set.c',
+ 	'commands/shadow_blur_radius.c',
+ 	'commands/shadow_color.c',
+diff -ruN '--exclude=.git' a/sway/sway.5.scd b/sway/sway.5.scd
+--- a/sway/sway.5.scd	2026-08-05 10:15:37.000000000 +0530
++++ b/sway/sway.5.scd	2026-11-22 13:07:02.355399491 +0530
+@@ -752,6 +752,12 @@
+ *blur_xray* enable|disable
+ 	Sets whether blur should only display the background.
+ 
++*session_lock_xray* enable|disable
++	Keep rendering the live desktop below the session lock surface. This
++	allows a locker to fade its own surface in and out over the desktop.
++	The desktop remains non-interactive while the session is locked.
++	The default is disabled.
++
+ *blur_passes* <value>
+ 	Adjusts the blur passes of windows between 0 (disabled) and 10
+ 	while 2 is the default value.
