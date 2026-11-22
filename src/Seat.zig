@@ -180,28 +180,23 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) voi
                     return;
                 },
                 .Escape => {
-                    lock.password.clear();
-                    lock.set_color(.init);
+                    lock.clearPassword();
                     return;
                 },
                 .u => {
                     if (ctrl_active(xkb_state)) {
-                        lock.password.clear();
-                        lock.set_color(.init);
+                        lock.clearPassword();
                         return;
                     }
                 },
                 .BackSpace => {
                     if (ctrl_active(xkb_state)) {
-                        lock.password.clear();
-                        lock.set_color(.init);
+                        lock.clearPassword();
                         return;
                     }
 
                     lock.password.pop_codepoint();
-                    if (lock.password.buffer.len == 0) {
-                        lock.set_color(.init);
-                    }
+                    lock.passwordChanged();
                     return;
                 },
                 else => {},
@@ -209,13 +204,8 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) voi
 
             // If key was not handled, write to password buffer
             const delta = xkb_state.keyGetUtf8(keycode, lock.password.unused_slice());
-            if (delta > 0) {
-                switch (lock.color) {
-                    .init, .input_alt, .fail => lock.set_color(.input),
-                    .input => lock.set_color(.input_alt),
-                }
-            }
             lock.password.grow(delta) catch log.err("password exceeds 1024 byte limit", .{});
+            if (delta > 0) lock.passwordChanged();
         },
         .repeat_info => {},
     }

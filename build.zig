@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const builtin = @import("builtin");
 const Build = std.Build;
 const mem = std.mem;
 
@@ -9,12 +10,22 @@ const manifest = @import("build.zig.zon");
 const version = manifest.version;
 
 pub fn build(b: *Build) !void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{
+        // Build against the host GNU ABI rather than the Nix glibc that Zig
+        // detects inside the development shell. This selects the system
+        // dynamic linker, which is required for system PAM modules to load.
+        .default_target = if (builtin.os.tag == .linux) .{ .abi = .gnu } else .{},
+    });
     const optimize = b.standardOptimizeOption(.{});
 
     const strip = b.option(bool, "strip", "Omit debug information") orelse false;
     const pie = b.option(bool, "pie", "Build a Position Independent Executable") orelse false;
     const use_llvm = b.option(bool, "llvm", "Force use of Zig's LLVM backend and the lld linker");
+    const pam_lib_dir = b.option(
+        []const u8,
+        "pam-lib-dir",
+        "Directory containing the system libpam (default: /usr/lib64)",
+    ) orelse "/usr/lib64";
 
     const man_pages = b.option(
         bool,
@@ -70,6 +81,7 @@ pub fn build(b: *Build) !void {
     scanner.generate("wl_compositor", 4);
     scanner.generate("wl_output", 3);
     scanner.generate("wl_seat", 5);
+    scanner.generate("wl_shm", 1);
     scanner.generate("ext_session_lock_manager_v1", 1);
     scanner.generate("wp_viewporter", 1);
     scanner.generate("wp_single_pixel_buffer_manager_v1", 1);
@@ -91,7 +103,12 @@ pub fn build(b: *Build) !void {
     });
     waylock.root_module.addOptions("build_options", options);
 
-    waylock.root_module.linkSystemLibrary("pam", .{});
+    // Use the system libpam, not the one from the development environment.
+    // The Nix build of pam_unix looks for its helper at /run/wrappers/bin,
+    // which does not exist on non-NixOS systems, so authentication would
+    // always fail with PAM_AUTHINFO_UNAVAIL.
+    waylock.root_module.addLibraryPath(.{ .cwd_relative = pam_lib_dir });
+    waylock.root_module.linkSystemLibrary("pam", .{ .use_pkg_config = .no });
 
     waylock.root_module.addImport("wayland", wayland);
     waylock.root_module.linkSystemLibrary("wayland-client", .{});
@@ -99,7 +116,14 @@ pub fn build(b: *Build) !void {
     waylock.root_module.addImport("xkbcommon", xkbcommon);
     waylock.root_module.linkSystemLibrary("xkbcommon", .{});
 
+    waylock.root_module.linkSystemLibrary("cairo", .{});
+
     waylock.pie = pie;
+
+    // The system PAM library is built against the host glibc, while Zig links
+    // against its own glibc stub when targeting a generic GNU ABI. Let the
+    // linker leave those glibc symbol references for the runtime loader.
+    waylock.linker_allow_shlib_undefined = true;
 
     b.installArtifact(waylock);
 }

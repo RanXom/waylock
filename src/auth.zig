@@ -27,7 +27,7 @@ pub const Connection = struct {
     }
 };
 
-pub fn fork_child(io: Io) Connection {
+pub fn fork_child(io: Io, pam_service: []const u8) Connection {
     var parent_to_child: [2]system.fd_t = undefined;
     var child_to_parent: [2]system.fd_t = undefined;
     switch (system.errno(system.pipe(&parent_to_child))) {
@@ -55,7 +55,7 @@ pub fn fork_child(io: Io) Connection {
         run(io, .{
             .read_fd = parent_to_child[0],
             .write_fd = child_to_parent[1],
-        });
+        }, pam_service);
     } else {
         // We are the parent
         _ = system.close(parent_to_child[0]);
@@ -70,7 +70,7 @@ pub fn fork_child(io: Io) Connection {
 
 var password: PasswordBuffer = undefined;
 
-fn run(io: Io, conn: Connection) noreturn {
+fn run(io: Io, conn: Connection, pam_service: []const u8) noreturn {
     password = PasswordBuffer.init();
 
     const conv: pam.Conv = .{
@@ -79,15 +79,24 @@ fn run(io: Io, conn: Connection) noreturn {
     };
     var pamh: *pam.Handle = undefined;
 
+    const service = std.heap.c_allocator.dupeSentinel(u8, pam_service, 0) catch {
+        log.err("failed to allocate PAM service name", .{});
+        process.exit(1);
+    };
+    defer std.heap.c_allocator.free(service);
+
     {
         const pw = std.c.getpwuid(std.c.getuid()) orelse {
             log.err("failed to get name of current user", .{});
             process.exit(1);
         };
 
-        const result = pam.start("waylock", pw.name, &conv, &pamh);
+        const result = pam.start(service.ptr, pw.name, &conv, &pamh);
         if (result != .success) {
-            log.err("failed to initialize PAM: {s}", .{result.description()});
+            log.err("failed to initialize PAM service '{s}': {s}", .{
+                pam_service,
+                result.description(),
+            });
             process.exit(1);
         }
     }

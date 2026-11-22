@@ -20,14 +20,18 @@ const xkb = @import("xkbcommon");
 
 const auth = @import("auth.zig");
 
+const cairo = @import("cairo.zig");
 const Output = @import("Output.zig");
+const Renderer = @import("Renderer.zig");
 const Seat = @import("Seat.zig");
 const PasswordBuffer = @import("PasswordBuffer.zig");
+const Theme = @import("Theme.zig");
 
-pub const Color = enum {
-    init,
+const max_dots = 128;
+
+pub const UiState = enum {
+    idle,
     input,
-    input_alt,
     fail,
 };
 
@@ -35,19 +39,11 @@ pub const Options = struct {
     fork_on_lock: bool,
     ready_fd: ?posix.fd_t = null,
     ignore_empty_password: bool,
+    config_path: ?[]const u8 = null,
+    pam_service: []const u8 = "swaylock",
     init_color: u24 = 0x002b36,
     input_color: u24 = 0x6c71c4,
-    input_alt_color: u24 = 0x6c71c4,
     fail_color: u24 = 0xdc322f,
-
-    fn rgb(options: Options, color: Color) u24 {
-        return switch (color) {
-            .init => options.init_color,
-            .input => options.input_color,
-            .input_alt => options.input_alt_color,
-            .fail => options.fail_color,
-        };
-    }
 };
 
 io: Io,
@@ -66,11 +62,28 @@ state: enum {
     exiting,
 } = .initializing,
 
-color: Color = .init,
+ui_state: UiState = .idle,
+ui_current_color: Theme.Rgba = Theme.default_outline,
+ui_from_color: Theme.Rgba = Theme.default_outline,
+ui_to_color: Theme.Rgba = Theme.default_outline,
+ui_current_width: f64 = 1.0,
+ui_from_width: f64 = 1.0,
+ui_to_width: f64 = 1.0,
+ui_anim_start: i64 = 0,
+ui_anim_active: bool = false,
+
+dots: [max_dots]f32 = @splat(0.0),
+dot_targets: [max_dots]f32 = @splat(0.0),
+dot_count: usize = 0,
+password_dots: usize = 0,
+last_tick: i64 = 0,
 
 fork_on_lock: bool,
 ready_fd: ?posix.fd_t,
 ignore_empty_password: bool,
+
+theme: Theme,
+background: ?*cairo.cairo_surface_t = null,
 
 pollfds: [2]posix.pollfd,
 
@@ -79,8 +92,7 @@ compositor: ?*wl.Compositor = null,
 session_lock_manager: ?*ext.SessionLockManagerV1 = null,
 session_lock: ?*ext.SessionLockV1 = null,
 viewporter: ?*wp.Viewporter = null,
-buffer_manager: ?*wp.SinglePixelBufferManagerV1 = null,
-buffers: [4]*wl.Buffer,
+shm: ?*wl.Shm = null,
 
 seats: wl.list.Head(Seat, .link),
 outputs: wl.list.Head(Output, .link),
@@ -96,18 +108,28 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
         .fork_on_lock = options.fork_on_lock,
         .ready_fd = options.ready_fd,
         .ignore_empty_password = options.ignore_empty_password,
+        .theme = Theme.load(io, gpa, options.config_path),
         .pollfds = undefined,
         .display = wl.Display.connect(null) catch |err| {
             fatal("failed to connect to a wayland compositor: {s}", .{@errorName(err)});
         },
-        .buffers = undefined,
         .seats = undefined,
         .outputs = undefined,
         .xkb_context = xkb.Context.new(.no_flags) orelse fatal_oom(),
         .password = PasswordBuffer.init(),
-        .auth_connection = auth.fork_child(io),
+        .auth_connection = auth.fork_child(io, options.pam_service),
     };
     defer lock.deinit();
+
+    if (!lock.theme.loaded) {
+        lock.theme.background_color = rgbToRgba(options.init_color);
+        lock.theme.primary_color = rgbToRgba(options.input_color);
+        lock.theme.error_color = rgbToRgba(options.fail_color);
+    }
+
+    lock.initUi();
+    lock.loadBackground();
+    lock.last_tick = lock.nowMs();
 
     lock.seats.init();
     lock.outputs.init();
@@ -140,11 +162,7 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
     if (lock.compositor == null) fatal_not_advertised(wl.Compositor);
     if (lock.session_lock_manager == null) fatal_not_advertised(ext.SessionLockManagerV1);
     if (lock.viewporter == null) fatal_not_advertised(wp.Viewporter);
-    if (lock.buffer_manager == null) fatal_not_advertised(wp.SinglePixelBufferManagerV1);
-
-    lock.buffers = create_buffers(lock.buffer_manager.?, options) catch fatal_oom();
-    lock.buffer_manager.?.destroy();
-    lock.buffer_manager = null;
+    if (lock.shm == null) fatal_not_advertised(wl.Shm);
 
     lock.session_lock = lock.session_lock_manager.?.lock() catch fatal_oom();
     lock.session_lock.?.setListener(*Lock, session_lock_listener, &lock);
@@ -170,7 +188,8 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
     while (lock.state != .exiting) {
         lock.flush_wayland_and_prepare_read();
 
-        _ = posix.poll(&lock.pollfds, -1) catch |err| {
+        const timeout: i32 = if (lock.animating()) 16 else -1;
+        _ = posix.poll(&lock.pollfds, timeout) catch |err| {
             fatal("poll() failed: {s}", .{@errorName(err)});
         };
 
@@ -196,13 +215,16 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
                     lock.state = .exiting;
                 },
                 @intFromBool(false) => {
-                    lock.set_color(.fail);
+                    lock.setUiState(.fail);
+                    lock.updateDots(0);
                 },
                 else => {
                     fatal("unexpected response received from child authentication process: {d}", .{byte[0]});
                 },
             }
         }
+
+        if (lock.tick()) lock.redraw();
     }
 
     // Calling flush_wayland_and_prepare_read() is not sufficient here as we
@@ -265,14 +287,16 @@ fn flush_wayland_and_prepare_read(lock: *Lock) void {
 fn deinit(lock: *Lock) void {
     if (lock.compositor) |compositor| compositor.destroy();
     if (lock.viewporter) |viewporter| viewporter.destroy();
-    for (lock.buffers) |buffer| buffer.destroy();
 
-    assert(lock.buffer_manager == null);
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
 
     while (lock.seats.first()) |seat| seat.destroy();
     while (lock.outputs.first()) |output| output.destroy();
+
+    if (lock.shm) |shm| shm.destroy();
+    if (lock.background) |background| cairo.cairo_surface_destroy(background);
+    lock.theme.deinit(lock.gpa);
 
     lock.display.disconnect();
 
@@ -338,8 +362,8 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
                 try Seat.create(lock, ev.name, wl_seat);
             } else if (mem.orderZ(u8, ev.interface, wp.Viewporter.interface.name) == .eq) {
                 lock.viewporter = try registry.bind(ev.name, wp.Viewporter, 1);
-            } else if (mem.orderZ(u8, ev.interface, wp.SinglePixelBufferManagerV1.interface.name) == .eq) {
-                lock.buffer_manager = try registry.bind(ev.name, wp.SinglePixelBufferManagerV1, 1);
+            } else if (mem.orderZ(u8, ev.interface, wl.Shm.interface.name) == .eq) {
+                lock.shm = try registry.bind(ev.name, wl.Shm, 1);
             }
         },
         .global_remove => |ev| {
@@ -412,6 +436,20 @@ pub fn submit_password(lock: *Lock) void {
     lock.send_password_to_auth() catch |err| {
         fatal("failed to send password to child authentication process: {s}", .{@errorName(err)});
     };
+
+    lock.updateDots(0);
+}
+
+pub fn clearPassword(lock: *Lock) void {
+    lock.password.clear();
+    lock.updateDots(0);
+    lock.setUiState(.idle);
+}
+
+pub fn passwordChanged(lock: *Lock) void {
+    const count = std.unicode.utf8CountCodepoints(lock.password.buffer) catch 0;
+    lock.updateDots(count);
+    lock.setUiState(if (lock.password.buffer.len == 0) .idle else .input);
 }
 
 fn send_password_to_auth(lock: *Lock) !void {
@@ -422,15 +460,155 @@ fn send_password_to_auth(lock: *Lock) !void {
     try writer.interface.writeAll(lock.password.buffer);
 }
 
-pub fn set_color(lock: *Lock, color: Color) void {
-    if (lock.color == color) return;
+fn initUi(lock: *Lock) void {
+    lock.ui_current_color = lock.theme.idleBorder();
+    lock.ui_from_color = lock.ui_current_color;
+    lock.ui_to_color = lock.ui_current_color;
+    lock.ui_current_width = 1.0;
+    lock.ui_from_width = 1.0;
+    lock.ui_to_width = 1.0;
+}
 
-    lock.color = color;
+fn loadBackground(lock: *Lock) void {
+    const path = lock.theme.background_image orelse return;
 
-    var it = lock.outputs.iterator(.forward);
-    while (it.next()) |output| {
-        output.attach_buffer(lock.buffers[@backingInt(lock.color)]);
+    const path_z = lock.gpa.dupeSentinel(u8, path, 0) catch return;
+    defer lock.gpa.free(path_z);
+
+    const surface = cairo.cairo_image_surface_create_from_png(path_z.ptr) orelse {
+        log.warn("failed to load lock background '{s}'", .{path});
+        return;
+    };
+    if (cairo.cairo_surface_status(surface) != cairo.STATUS_SUCCESS) {
+        log.warn("failed to load lock background '{s}'", .{path});
+        cairo.cairo_surface_destroy(surface);
+        return;
     }
+    lock.background = surface;
+}
+
+fn setUiState(lock: *Lock, state: UiState) void {
+    if (lock.ui_state == state) return;
+
+    const color = switch (state) {
+        .idle => lock.theme.idleBorder(),
+        .input => lock.theme.primary_color,
+        .fail => lock.theme.error_color,
+    };
+    const width: f64 = switch (state) {
+        .idle => 1.0,
+        .input => 2.0,
+        .fail => 4.0,
+    };
+
+    lock.ui_state = state;
+    lock.ui_from_color = lock.ui_current_color;
+    lock.ui_to_color = color;
+    lock.ui_from_width = lock.ui_current_width;
+    lock.ui_to_width = width;
+    lock.ui_anim_start = lock.nowMs();
+    lock.ui_anim_active = true;
+}
+
+fn updateDots(lock: *Lock, count: usize) void {
+    const n = @min(count, max_dots);
+    for (0..max_dots) |i| {
+        lock.dot_targets[i] = if (i < n) 1.0 else 0.0;
+    }
+
+    if (n > lock.dot_count) {
+        for (lock.dot_count..n) |i| lock.dots[i] = 0.0;
+        lock.dot_count = n;
+    }
+
+    lock.password_dots = n;
+}
+
+fn tick(lock: *Lock) bool {
+    const now = lock.nowMs();
+    var dirty = false;
+
+    if (lock.ui_anim_active) {
+        const elapsed = now - lock.ui_anim_start;
+        const duration: i64 = 180;
+        const t: f64 = if (elapsed >= duration)
+            1.0
+        else
+            @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(duration));
+        const eased = t * t * (3.0 - 2.0 * t);
+
+        lock.ui_current_color = Theme.Rgba.lerp(lock.ui_from_color, lock.ui_to_color, eased);
+        lock.ui_current_width = lock.ui_from_width + (lock.ui_to_width - lock.ui_from_width) * eased;
+        if (t >= 1.0) lock.ui_anim_active = false;
+        dirty = true;
+    }
+
+    const dt_ms: i64 = @max(0, @min(now - lock.last_tick, 50));
+    lock.last_tick = now;
+
+    if (dt_ms > 0) {
+        const step: f32 = @floatCast(@as(f64, @floatFromInt(dt_ms)) / 150.0);
+        for (0..max_dots) |i| {
+            const target = lock.dot_targets[i];
+            if (lock.dots[i] < target) {
+                lock.dots[i] = @min(target, lock.dots[i] + step);
+                dirty = true;
+            } else if (lock.dots[i] > target) {
+                lock.dots[i] = @max(target, lock.dots[i] - step);
+                dirty = true;
+            }
+        }
+    } else {
+        for (0..max_dots) |i| {
+            if (lock.dots[i] != lock.dot_targets[i]) dirty = true;
+        }
+    }
+
+    while (lock.dot_count > 0 and
+        lock.dots[lock.dot_count - 1] <= 0.001 and
+        lock.dot_targets[lock.dot_count - 1] <= 0.001)
+    {
+        lock.dot_count -= 1;
+    }
+
+    return dirty;
+}
+
+fn animating(lock: *Lock) bool {
+    if (lock.ui_anim_active) return true;
+    for (0..max_dots) |i| {
+        if (lock.dots[i] != lock.dot_targets[i]) return true;
+    }
+    return false;
+}
+
+fn nowMs(lock: *Lock) i64 {
+    return Io.Clock.Timestamp.now(lock.io, .awake).raw.toMilliseconds();
+}
+
+fn redraw(lock: *Lock) void {
+    var it = lock.outputs.iterator(.forward);
+    while (it.next()) |output| output.redraw();
+}
+
+pub fn render(lock: *Lock, cr: *cairo.cairo_t, width: f64, height: f64) void {
+    Renderer.render(&lock.theme, lock.background, cr, .{
+        .width = width,
+        .height = height,
+        .border = lock.ui_current_color,
+        .border_width = lock.ui_current_width,
+        .dots = &lock.dots,
+        .dot_count = lock.dot_count,
+    });
+}
+
+fn rgbToRgba(rgb: u24) Theme.Rgba {
+    return .{
+        .r = @as(f64, @floatFromInt((rgb >> 16) & 0xff)) / 255.0,
+        .g = @as(f64, @floatFromInt((rgb >> 8) & 0xff)) / 255.0,
+        .b = @as(f64, @floatFromInt(rgb & 0xff)) / 255.0,
+        .a = 1.0,
+    };
 }
 
 fn fatal_oom() noreturn {
@@ -439,23 +617,6 @@ fn fatal_oom() noreturn {
 
 fn fatal_not_advertised(comptime Global: type) noreturn {
     fatal("{s} not advertised", .{Global.interface.name});
-}
-
-fn create_buffers(
-    buffer_manager: *wp.SinglePixelBufferManagerV1,
-    options: Options,
-) error{OutOfMemory}![4]*wl.Buffer {
-    var buffers: [4]*wl.Buffer = undefined;
-    for ([_]Color{ .init, .input, .input_alt, .fail }) |color| {
-        const rgb = options.rgb(color);
-        buffers[@backingInt(color)] = try buffer_manager.createU32RgbaBuffer(
-            @as(u32, (rgb >> 16) & 0xff) * (0xffff_ffff / 0xff),
-            @as(u32, (rgb >> 8) & 0xff) * (0xffff_ffff / 0xff),
-            @as(u32, (rgb >> 0) & 0xff) * (0xffff_ffff / 0xff),
-            0xffff_ffff,
-        );
-    }
-    return buffers;
 }
 
 fn fork_to_background() void {

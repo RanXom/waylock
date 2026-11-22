@@ -22,11 +22,12 @@ const usage =
     \\  -fork-on-lock              Fork to the background after locking.
     \\  -ready-fd <fd>             Write a newline to fd after locking.
     \\  -ignore-empty-password     Do not validate an empty password.
+    \\  -config <path>             Read theme and geometry from <path>.
+    \\  -pam-service <name>        Use the named PAM service (default: swaylock).
     \\
-    \\  -init-color 0xRRGGBB       Set the initial color.
-    \\  -input-color 0xRRGGBB      Set the color used after input.
-    \\  -input-alt-color 0xRRGGBB  Set the alternate color used after input.
-    \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
+    \\  -init-color 0xRRGGBB       Set the fallback initial color.
+    \\  -input-color 0xRRGGBB      Set the fallback input color.
+    \\  -fail-color 0xRRGGBB       Set the fallback authentication failure color.
     \\
 ;
 
@@ -50,9 +51,10 @@ pub fn main(init: process.Init) error{ OutOfMemory, Unexpected }!void {
         .{ .name = "fork-on-lock", .kind = .boolean },
         .{ .name = "ready-fd", .kind = .arg },
         .{ .name = "ignore-empty-password", .kind = .boolean },
+        .{ .name = "config", .kind = .arg },
+        .{ .name = "pam-service", .kind = .arg },
         .{ .name = "init-color", .kind = .arg },
         .{ .name = "input-color", .kind = .arg },
-        .{ .name = "input-alt-color", .kind = .arg },
         .{ .name = "fail-color", .kind = .arg },
     }).parse(args[1..]) catch {
         stderr.writeAll(usage) catch {};
@@ -94,6 +96,8 @@ pub fn main(init: process.Init) error{ OutOfMemory, Unexpected }!void {
     var options: Lock.Options = .{
         .fork_on_lock = result.flags.@"fork-on-lock",
         .ignore_empty_password = result.flags.@"ignore-empty-password",
+        .config_path = resolveConfigPath(arena, init.environ_map, result.flags.config),
+        .pam_service = result.flags.@"pam-service" orelse "swaylock",
     };
     if (result.flags.@"ready-fd") |raw| {
         options.ready_fd = std.fmt.parseInt(posix.fd_t, raw, 10) catch {
@@ -102,14 +106,25 @@ pub fn main(init: process.Init) error{ OutOfMemory, Unexpected }!void {
         };
     }
     if (result.flags.@"init-color") |raw| options.init_color = parse_color(raw);
-    if (result.flags.@"input-color") |raw| {
-        options.input_color = parse_color(raw);
-        options.input_alt_color = parse_color(raw);
-    }
-    if (result.flags.@"input-alt-color") |raw| options.input_alt_color = parse_color(raw);
+    if (result.flags.@"input-color") |raw| options.input_color = parse_color(raw);
     if (result.flags.@"fail-color") |raw| options.fail_color = parse_color(raw);
 
     Lock.run(io, init.gpa, options);
+}
+
+fn resolveConfigPath(
+    arena: mem.Allocator,
+    environ_map: *const std.process.Environ.Map,
+    explicit: ?[]const u8,
+) ?[]const u8 {
+    if (explicit) |path| return path;
+
+    const config_home = environ_map.get("XDG_CONFIG_HOME") orelse blk: {
+        const home = environ_map.get("HOME") orelse return null;
+        break :blk std.fmt.allocPrint(arena, "{s}/.config", .{home}) catch return null;
+    };
+
+    return std.fmt.allocPrint(arena, "{s}/waylock/theme.conf", .{config_home}) catch null;
 }
 
 fn parse_color(raw: []const u8) u24 {

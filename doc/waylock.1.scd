@@ -45,30 +45,37 @@ unlocked.
 	key is pressed. Instead, do nothing. This may be useful if, for
 	example, the Enter key is used to wake the computer from sleep.
 
+*-config* _path_
+	Read theme and geometry from _path_. The default is
+	*$XDG_CONFIG_HOME/waylock/theme.conf*. See *examples/theme.conf* for
+	the available keys.
+
+*-pam-service* _name_
+	Use the named PAM service. (default: swaylock)
+
 *-init-color* _0xRRGGBB_
-	Set the initial color. (default: 0x002b36)
+	Set the fallback background color used when no theme file is loaded.
+	(default: 0x002b36)
 
 *-input-color* _0xRRGGBB_
-	Set the color used after input. (default: 0x6c71c4)
-
-*-input-alt-color* _0xRRGGBB_
-	Set the alternate color used after input. (default is what
-	*-input-color* is set to)
+	Set the fallback primary color used when no theme file is loaded.
+	(default: 0x6c71c4)
 
 *-fail-color* _0xRRGGBB_
-	Set the color used on authentication failure. (default: 0xdc322f)
+	Set the fallback error color used when no theme file is loaded.
+	(default: 0xdc322f)
 
 # USAGE
 
-Run the waylock executable to lock the session. All monitors will be blanked
-with the *-init-color*. Typing causes the color to change to the
-*-input-color*. If *-input-alt-color* is set, the typing color will alternate
-between this and the former. Esc or Ctrl-U clears all current input, while
+Run the waylock executable to lock the session. Each monitor shows the
+configured background image, with a single centered password field. Typing
+causes the field's outline to animate to the primary color and adds a fading
+dot for every codepoint. Esc or Ctrl-U clears all current input, while
 backspace deletes the last UTF-8 codepoint.
 
 To unlock the session, type your password and press Enter. If the password
-is correct, waylock will unlock the session and exit. Otherwise, the color
-will change to the *-fail-color* and you may try again.
+is correct, waylock will unlock the session and exit. Otherwise, the field's
+outline animates to the error color and you may try again.
 
 In order to automatically run waylock after a certain amount of time with
 no input or before sleep, the *swayidle*(1) utility or a similar program

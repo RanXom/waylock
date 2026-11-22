@@ -42,6 +42,29 @@ override directory `/etc/pam.d`. Therefore care must be taken if installing
 to a prefix other than `/usr` or `/usr/local` to ensure the configuration file
 [pam.d/waylock](pam.d/waylock) is found by PAM.
 
+## Custom build
+
+This fork replaces the solid-color background with a blurred wallpaper and a
+single centered password field rendered with Cairo. It reads
+`$XDG_CONFIG_HOME/waylock/theme.conf` by default; see
+[examples/theme.conf](examples/theme.conf) and
+[examples/matugen-waylock.conf](examples/matugen-waylock.conf) for the format
+and Matugen integration.
+
+The build links against the host `libpam` rather than the copy in the
+development shell, because the latter expects the NixOS helper path
+`/run/wrappers/bin/unix_chkpwd`. The default lookup directory is
+`/usr/lib64`; use `-Dpam-lib-dir=<dir>` if your distribution installs
+`libpam.so` elsewhere. Authentication uses the `swaylock` PAM service by
+default, since many distributions already ship `/etc/pam.d/swaylock`. Pass
+`-pam-service waylock` to use the service installed by this project instead.
+
+Build and install with:
+
+```
+devenv shell -- zig build -Doptimize=ReleaseSafe --prefix ~/.local install
+```
+
 ## Usage
 
 See the `waylock(1)` man page or the output of `waylock -h` for an overview
