@@ -48,7 +48,7 @@ unlocked.
 *-config* _path_
 	Read theme and geometry from _path_. The default is
 	*$XDG_CONFIG_HOME/waylock/theme.conf*. See *examples/theme.conf* for
-	the available keys.
+	a complete example.
 
 *-pam-service* _name_
 	Use the named PAM service. (default: swaylock)
@@ -65,13 +65,49 @@ unlocked.
 	Set the fallback error color used when no theme file is loaded.
 	(default: 0xdc322f)
 
+# CONFIGURATION
+
+The theme file uses one `key = value` pair per line. Global keys must come
+before the first `[widget.NAME]` section. Use a `[global]` section to switch
+back to global keys after a widget section.
+
+Global keys include `background_image`, `background_color`, `surface_color`, `surface_opacity`, `text_color`, `primary_color`, `error_color`, `outline_color`, `box_width`, `box_height`, `border_radius`, `box_anchor`, `box_x`, `box_y`, `dot_spacing`, `dot_radius`, `font_family`, `font_size`, and `fade_ms`.
+
+The password field and every widget are positioned relative to an anchor:
+
+```
+box_anchor = center
+box_x = 0
+box_y = 0
+```
+
+Valid anchors are `top-left`, `top-center`, `top-right`, `center-left`, `center`, `center-right`, `bottom-left`, `bottom-center`, and `bottom-right`. The `x` and `y` values are pixel offsets from that anchor; positive values move right and down.
+
+A widget section adds a text or image element:
+
+```
+[widget.hostname]
+type = text
+text = legion
+anchor = top-center
+x = 0
+y = 40
+font_size = 18
+color = #e4e2e4
+```
+
+Widget keys include `type` (`text` or `image`), `text`, `image`, `anchor`, `x`, `y`, `font_family`, `font_size`, `bold`, `color`, `opacity`, `width`, and `height`. The `width` and `height` keys apply to image widgets; text is sized by `font_size`. Up to 32 widgets may be defined.
+
 # USAGE
 
 Run the waylock executable to lock the session. Each monitor shows the
-configured background image, with a single centered password field. Typing
-causes the field's outline to animate to the primary color and adds a fading
-dot for every codepoint. Esc or Ctrl-U clears all current input, while
-backspace deletes the last UTF-8 codepoint.
+configured background image, with a single password field. Typing causes the
+field's outline to animate to the primary color and adds a fading dot for
+every codepoint. Esc or Ctrl-U clears all current input, while backspace
+deletes the last UTF-8 codepoint.
+
+The lock screen fades in when the session is locked and fades out before it
+is unlocked. Set `fade_ms = 0` to disable this transition.
 
 To unlock the session, type your password and press Enter. If the password
 is correct, waylock will unlock the session and exit. Otherwise, the field's

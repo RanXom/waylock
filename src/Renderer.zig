@@ -12,6 +12,8 @@ pub const Params = struct {
     border_width: f64,
     dots: []const f32,
     dot_count: usize,
+    ui_alpha: f64,
+    screen_fade: f64,
 };
 
 pub fn render(
@@ -22,14 +24,44 @@ pub fn render(
 ) void {
     drawBackground(theme, background, cr, params.width, params.height);
 
+    drawBox(theme, cr, params);
+    drawWidgets(theme, cr, params.width, params.height, params.ui_alpha);
+
+    // Fade the whole lock screen from (or to) the theme background. This hides
+    // the transition into and out of the compositor's session lock surface.
+    if (params.screen_fade > 0.001) {
+        cairo.cairo_set_source_rgba(
+            cr,
+            theme.background_color.r,
+            theme.background_color.g,
+            theme.background_color.b,
+            params.screen_fade,
+        );
+        cairo.cairo_paint(cr);
+    }
+}
+
+fn drawBox(theme: *const Theme, cr: *cairo.cairo_t, params: Params) void {
+    const alpha = params.ui_alpha;
+    if (alpha <= 0.001) return;
+
     const box_w = theme.box_width;
     const box_h = theme.box_height;
-    const x = (params.width - box_w) / 2.0;
-    const y = (params.height - box_h) / 2.0;
+    const pos = anchoredPosition(
+        theme.box_anchor,
+        params.width,
+        params.height,
+        theme.box_x,
+        theme.box_y,
+        box_w,
+        box_h,
+    );
+    const x = pos.x;
+    const y = pos.y;
 
     // Outer hairline, matching the theme reference's faint double border.
     cairo.cairo_set_line_width(cr, 1.0);
-    cairo.cairo_set_source_rgba(cr, theme.text_color.r, theme.text_color.g, theme.text_color.b, 0.25);
+    cairo.cairo_set_source_rgba(cr, theme.text_color.r, theme.text_color.g, theme.text_color.b, 0.25 * alpha);
     roundedRect(cr, x - 2.0, y - 2.0, box_w + 4.0, box_h + 4.0, theme.border_radius);
     cairo.cairo_stroke(cr);
 
@@ -39,7 +71,7 @@ pub fn render(
         theme.surface_color.r,
         theme.surface_color.g,
         theme.surface_color.b,
-        theme.surface_opacity,
+        theme.surface_opacity * alpha,
     );
     roundedRect(cr, x, y, box_w, box_h, theme.border_radius);
     cairo.cairo_fill(cr);
@@ -49,7 +81,13 @@ pub fn render(
         const bw = params.border_width;
         const inset = bw / 2.0;
         cairo.cairo_set_line_width(cr, bw);
-        cairo.cairo_set_source_rgba(cr, params.border.r, params.border.g, params.border.b, params.border.a);
+        cairo.cairo_set_source_rgba(
+            cr,
+            params.border.r,
+            params.border.g,
+            params.border.b,
+            params.border.a * alpha,
+        );
         roundedRect(
             cr,
             x + inset,
@@ -62,6 +100,111 @@ pub fn render(
     }
 
     drawDots(theme, cr, params, x, y, box_w, box_h);
+}
+
+fn drawWidgets(theme: *const Theme, cr: *cairo.cairo_t, width: f64, height: f64, ui_alpha: f64) void {
+    for (theme.widgets[0..theme.widget_count]) |*widget| {
+        const alpha = widget.opacity * ui_alpha;
+        if (alpha <= 0.001) continue;
+
+        switch (widget.kind) {
+            .text => drawTextWidget(theme, widget, cr, width, height, alpha),
+            .image => drawImageWidget(widget, cr, width, height, alpha),
+        }
+    }
+}
+
+fn drawTextWidget(
+    theme: *const Theme,
+    widget: *const Theme.Widget,
+    cr: *cairo.cairo_t,
+    width: f64,
+    height: f64,
+    alpha: f64,
+) void {
+    const text = widget.text orelse return;
+    const family = widget.font_family orelse theme.font_family orelse "sans";
+    const size = widget.font_size orelse theme.font_size;
+
+    cairo.cairo_select_font_face(
+        cr,
+        family.ptr,
+        cairo.FONT_SLANT_NORMAL,
+        if (widget.bold) cairo.FONT_WEIGHT_BOLD else cairo.FONT_WEIGHT_NORMAL,
+    );
+    cairo.cairo_set_font_size(cr, size);
+
+    var extents: cairo.TextExtents = undefined;
+    cairo.cairo_text_extents(cr, text.ptr, &extents);
+
+    const pos = anchoredPosition(
+        widget.anchor,
+        width,
+        height,
+        widget.x,
+        widget.y,
+        extents.width,
+        extents.height,
+    );
+
+    const color = widget.color orelse theme.text_color;
+    cairo.cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a * alpha);
+    cairo.cairo_move_to(cr, pos.x - extents.x_bearing, pos.y - extents.y_bearing);
+    cairo.cairo_show_text(cr, text.ptr);
+}
+
+fn drawImageWidget(
+    widget: *const Theme.Widget,
+    cr: *cairo.cairo_t,
+    width: f64,
+    height: f64,
+    alpha: f64,
+) void {
+    const image = widget.image orelse return;
+
+    const natural_w: f64 = @floatFromInt(cairo.cairo_image_surface_get_width(image));
+    const natural_h: f64 = @floatFromInt(cairo.cairo_image_surface_get_height(image));
+    if (natural_w <= 0.0 or natural_h <= 0.0) return;
+
+    const draw_w = widget.width orelse natural_w;
+    const draw_h = widget.height orelse natural_h;
+    const pos = anchoredPosition(
+        widget.anchor,
+        width,
+        height,
+        widget.x,
+        widget.y,
+        draw_w,
+        draw_h,
+    );
+
+    cairo.cairo_save(cr);
+    cairo.cairo_translate(cr, pos.x, pos.y);
+    if (draw_w != natural_w or draw_h != natural_h) {
+        cairo.cairo_scale(cr, draw_w / natural_w, draw_h / natural_h);
+    }
+    cairo.cairo_set_source_surface(cr, image, 0.0, 0.0);
+    if (cairo.cairo_get_source(cr)) |pattern| {
+        cairo.cairo_pattern_set_filter(pattern, cairo.FILTER_BILINEAR);
+    }
+    cairo.cairo_paint_with_alpha(cr, alpha);
+    cairo.cairo_restore(cr);
+}
+
+fn anchoredPosition(
+    anchor: Theme.Anchor,
+    screen_w: f64,
+    screen_h: f64,
+    x: f64,
+    y: f64,
+    element_w: f64,
+    element_h: f64,
+) struct { x: f64, y: f64 } {
+    const fractions = anchor.fractions();
+    return .{
+        .x = screen_w * fractions.x + x - element_w * fractions.x,
+        .y = screen_h * fractions.y + y - element_h * fractions.y,
+    };
 }
 
 fn drawBackground(
@@ -139,7 +282,7 @@ fn drawDots(
             theme.text_color.r,
             theme.text_color.g,
             theme.text_color.b,
-            theme.text_color.a * alpha,
+            theme.text_color.a * alpha * params.ui_alpha,
         );
         cairo.cairo_arc(cr, x0 + @as(f64, @floatFromInt(i)) * spacing, cy, radius, 0.0, 2.0 * std.math.pi);
         cairo.cairo_fill(cr);

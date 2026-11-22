@@ -35,6 +35,12 @@ pub const UiState = enum {
     fail,
 };
 
+const FadeDirection = enum {
+    none,
+    in,
+    out,
+};
+
 pub const Options = struct {
     fork_on_lock: bool,
     ready_fd: ?posix.fd_t = null,
@@ -77,6 +83,16 @@ dot_targets: [max_dots]f32 = @splat(0.0),
 dot_count: usize = 0,
 password_dots: usize = 0,
 last_tick: i64 = 0,
+
+screen_fade: f64 = 1.0,
+ui_alpha: f64 = 0.0,
+fade_direction: FadeDirection = .none,
+fade_start: i64 = 0,
+fade_duration_ms: i64 = 250,
+fade_from_screen: f64 = 1.0,
+fade_from_ui: f64 = 0.0,
+pending_unlock: bool = false,
+fade_out_done_at: i64 = 0,
 
 fork_on_lock: bool,
 ready_fd: ?posix.fd_t,
@@ -130,6 +146,7 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
     lock.initUi();
     lock.loadBackground();
     lock.last_tick = lock.nowMs();
+    lock.fade_duration_ms = lock.theme.fade_ms;
 
     lock.seats.init();
     lock.outputs.init();
@@ -210,9 +227,7 @@ pub fn run(io: Io, gpa: mem.Allocator, options: Options) void {
             };
             switch (byte[0]) {
                 @intFromBool(true) => {
-                    lock.session_lock.?.unlockAndDestroy();
-                    lock.session_lock = null;
-                    lock.state = .exiting;
+                    lock.startFadeOut();
                 },
                 @intFromBool(false) => {
                     lock.setUiState(.fail);
@@ -394,6 +409,7 @@ fn session_lock_listener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, 
         .locked => {
             assert(lock.state == .locking);
             lock.state = .locked;
+            lock.startFadeIn();
             if (lock.ready_fd) |ready_fd| {
                 const file: Io.File = .{ .handle = ready_fd, .flags = .{ .nonblocking = false } };
                 defer file.close(lock.io);
@@ -428,6 +444,8 @@ fn session_lock_listener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, 
 pub fn submit_password(lock: *Lock) void {
     assert(lock.state == .locked);
 
+    if (lock.pending_unlock) return;
+
     if (lock.ignore_empty_password and lock.password.buffer.len == 0) {
         log.info("ignoring submission of empty password", .{});
         return;
@@ -441,12 +459,14 @@ pub fn submit_password(lock: *Lock) void {
 }
 
 pub fn clearPassword(lock: *Lock) void {
+    if (lock.pending_unlock) return;
     lock.password.clear();
     lock.updateDots(0);
     lock.setUiState(.idle);
 }
 
 pub fn passwordChanged(lock: *Lock) void {
+    if (lock.pending_unlock) return;
     const count = std.unicode.utf8CountCodepoints(lock.password.buffer) catch 0;
     lock.updateDots(count);
     lock.setUiState(if (lock.password.buffer.len == 0) .idle else .input);
@@ -458,6 +478,50 @@ fn send_password_to_auth(lock: *Lock) !void {
     const len_bytes: [4]u8 = @bitCast(@as(u32, @intCast(lock.password.buffer.len)));
     try writer.interface.writeAll(&len_bytes);
     try writer.interface.writeAll(lock.password.buffer);
+}
+
+fn startFadeIn(lock: *Lock) void {
+    if (lock.fade_duration_ms <= 0) {
+        lock.screen_fade = 0.0;
+        lock.ui_alpha = 1.0;
+        lock.redraw();
+        return;
+    }
+
+    lock.fade_direction = .in;
+    lock.fade_start = lock.nowMs();
+    lock.fade_from_screen = lock.screen_fade;
+    lock.fade_from_ui = lock.ui_alpha;
+}
+
+fn startFadeOut(lock: *Lock) void {
+    if (lock.pending_unlock) return;
+
+    lock.pending_unlock = true;
+    lock.fade_out_done_at = 0;
+
+    if (lock.fade_duration_ms <= 0) {
+        lock.screen_fade = 1.0;
+        lock.ui_alpha = 0.0;
+        lock.fade_direction = .none;
+        lock.fade_out_done_at = lock.nowMs();
+        lock.redraw();
+        return;
+    }
+
+    lock.fade_direction = .out;
+    lock.fade_start = lock.nowMs();
+    lock.fade_from_screen = lock.screen_fade;
+    lock.fade_from_ui = lock.ui_alpha;
+}
+
+fn finishUnlock(lock: *Lock) void {
+    lock.pending_unlock = false;
+    if (lock.session_lock) |session_lock| {
+        session_lock.unlockAndDestroy();
+        lock.session_lock = null;
+    }
+    lock.state = .exiting;
 }
 
 fn initUi(lock: *Lock) void {
@@ -528,6 +592,45 @@ fn tick(lock: *Lock) bool {
     const now = lock.nowMs();
     var dirty = false;
 
+    if (lock.fade_direction != .none) {
+        const duration = lock.fade_duration_ms;
+        const elapsed = now - lock.fade_start;
+        const t: f64 = if (duration <= 0 or elapsed >= duration)
+            1.0
+        else
+            @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(duration));
+        const eased = t * t * (3.0 - 2.0 * t);
+
+        switch (lock.fade_direction) {
+            .in => {
+                lock.screen_fade = lock.fade_from_screen + (0.0 - lock.fade_from_screen) * eased;
+                lock.ui_alpha = lock.fade_from_ui + (1.0 - lock.fade_from_ui) * eased;
+            },
+            .out => {
+                lock.screen_fade = lock.fade_from_screen + (1.0 - lock.fade_from_screen) * eased;
+                lock.ui_alpha = lock.fade_from_ui + (0.0 - lock.fade_from_ui) * eased;
+            },
+            .none => {},
+        }
+
+        if (t >= 1.0) {
+            lock.fade_direction = .none;
+            if (lock.pending_unlock) lock.fade_out_done_at = now;
+        }
+        dirty = true;
+    }
+
+    // Keep the final faded-out frame on screen briefly before asking the
+    // compositor to unlock, so the transition does not pop.
+    if (lock.pending_unlock and
+        lock.fade_direction == .none and
+        lock.fade_out_done_at != 0 and
+        now >= lock.fade_out_done_at + 80)
+    {
+        lock.finishUnlock();
+        return false;
+    }
+
     if (lock.ui_anim_active) {
         const elapsed = now - lock.ui_anim_start;
         const duration: i64 = 180;
@@ -575,6 +678,8 @@ fn tick(lock: *Lock) bool {
 }
 
 fn animating(lock: *Lock) bool {
+    if (lock.pending_unlock) return true;
+    if (lock.fade_direction != .none) return true;
     if (lock.ui_anim_active) return true;
     for (0..max_dots) |i| {
         if (lock.dots[i] != lock.dot_targets[i]) return true;
@@ -599,6 +704,8 @@ pub fn render(lock: *Lock, cr: *cairo.cairo_t, width: f64, height: f64) void {
         .border_width = lock.ui_current_width,
         .dots = &lock.dots,
         .dot_count = lock.dot_count,
+        .ui_alpha = lock.ui_alpha,
+        .screen_fade = lock.screen_fade,
     });
 }
 
