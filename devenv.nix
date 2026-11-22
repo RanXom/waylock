@@ -15,6 +15,7 @@
     pkgs.git
     pkgs.zig
     pkgs.wayland
+    pkgs.wayland-scanner
     pkgs.wayland-protocols
     pkgs.libxkbcommon
     pkgs.cairo
