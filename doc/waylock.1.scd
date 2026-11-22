@@ -71,9 +71,9 @@ The theme file uses one `key = value` pair per line. Global keys must come
 before the first `[widget.NAME]` section. Use a `[global]` section to switch
 back to global keys after a widget section.
 
-Global keys include `background_image`, `transition_image`, `background_color`, `surface_color`, `surface_opacity`, `text_color`, `primary_color`, `error_color`, `outline_color`, `box_width`, `box_height`, `border_radius`, `box_anchor`, `box_x`, `box_y`, `dot_spacing`, `dot_radius`, `font_family`, `font_size`, and `fade_ms`.
+Global keys include `background_image`, `background_color`, `surface_color`, `surface_opacity`, `text_color`, `primary_color`, `error_color`, `outline_color`, `box_width`, `box_height`, `border_radius`, `box_anchor`, `box_x`, `box_y`, `dot_spacing`, `dot_radius`, `font_family`, `font_size`, `fade_ms`, and `compositor_fade`.
 
-If `transition_image` points to a desktop snapshot, the lock screen crossfades from that image when locking and back to it before unlocking. A fresh snapshot can be captured with `grim` immediately before launching waylock; the example `lock-session` wrapper does this. Without a snapshot, only the UI fades over the blurred wallpaper.
+The `compositor_fade = auto` setting enables the transparent crossfade when the compositor keeps the live desktop visible below the lock surface. The SwayFX `session_lock_xray` patch in `contrib/` does this and exports `SWAYFX_SESSION_LOCK_XRAY=1`. Set it to `true` or `false` to force the behavior. Without compositor support, only the UI fades over the blurred wallpaper.
 
 The password field and every widget are positioned relative to an anchor:
 
@@ -109,9 +109,9 @@ every codepoint. Esc or Ctrl-U clears all current input, while backspace
 deletes the last UTF-8 codepoint.
 
 The lock screen fades in when the session is locked and fades out before it
-is unlocked. With `transition_image`, this is a crossfade from and back to
-the desktop snapshot captured just before locking. Set `fade_ms = 0` to
-disable the transition.
+is unlocked. With compositor support, this is a true crossfade from and back
+to the live desktop. Otherwise, only the UI fades over the blurred wallpaper.
+Set `fade_ms = 0` to disable the transition.
 
 To unlock the session, type your password and press Enter. If the password
 is correct, waylock will unlock the session and exit. Otherwise, the field's

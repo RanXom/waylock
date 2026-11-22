@@ -64,18 +64,21 @@ box_y = 0
 fade_ms = 250
 ```
 
-For a crossfade from the desktop, capture a snapshot immediately before
-locking and point `transition_image` at it:
+For a true crossfade from the live desktop, the compositor must keep
+rendering the desktop below the session lock surface. SwayFX needs the
+`session_lock_xray` patch in
+[contrib/swayfx-session-lock-xray.patch](contrib/swayfx-session-lock-xray.patch).
+Enable it in the Sway config:
 
 ```
-transition="${XDG_CACHE_HOME:-$HOME/.cache}/waylock-transition.png"
-grim "$transition" && waylock
+session_lock_xray enable
 ```
 
-[examples/lock-session](examples/lock-session) captures the snapshot and
-removes it when the locker exits, so a later manual launch cannot reuse a
-stale desktop. Without a snapshot, only the UI fades over the blurred
-wallpaper.
+The patched compositor exports `SWAYFX_SESSION_LOCK_XRAY=1`, and
+`compositor_fade = auto` makes the locker render its surface with per-pixel
+alpha over the live desktop. No screenshot is taken and locking starts
+immediately. Without compositor support, only the UI fades over the blurred
+wallpaper; there is no solid-color flash.
 
 Additional text or image widgets can be placed anywhere using the same
 anchor/offset scheme:

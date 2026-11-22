@@ -12,10 +12,11 @@ pub const Params = struct {
     border_width: f64,
     dots: []const f32,
     dot_count: usize,
-    /// 0 = fully transition image, 1 = fully lock screen.
+    /// 0 = fully transparent, 1 = fully opaque lock screen.
     progress: f64,
-    /// Desktop snapshot captured just before locking, if available.
-    transition: ?*cairo.cairo_surface_t,
+    /// True when the compositor keeps the live desktop visible below the
+    /// session lock surface, allowing a true crossfade.
+    compositor_fade: bool,
 };
 
 pub fn render(
@@ -24,13 +25,16 @@ pub fn render(
     cr: *cairo.cairo_t,
     params: Params,
 ) void {
-    if (params.transition) |snapshot| {
-        drawImageFill(snapshot, cr, params.width, params.height, 1.0);
-        drawBackground(theme, background, cr, params.width, params.height, params.progress);
-    } else {
-        // Without a snapshot, fade only the UI over the blurred wallpaper.
-        drawBackground(theme, background, cr, params.width, params.height, 1.0);
-    }
+    // Start from a fully transparent buffer. With compositor_fade the
+    // compositor blends this over the live desktop; without it the opaque
+    // wallpaper below covers the transparent buffer.
+    cairo.cairo_set_operator(cr, cairo.OPERATOR_SOURCE);
+    cairo.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+    cairo.cairo_paint(cr);
+    cairo.cairo_set_operator(cr, cairo.OPERATOR_OVER);
+
+    const background_alpha = if (params.compositor_fade) params.progress else 1.0;
+    drawBackground(theme, background, cr, params.width, params.height, background_alpha);
 
     drawBox(theme, cr, params, params.progress);
     drawWidgets(theme, cr, params.width, params.height, params.progress);
@@ -199,32 +203,6 @@ fn anchoredPosition(
         .x = screen_w * fractions.x + x - element_w * fractions.x,
         .y = screen_h * fractions.y + y - element_h * fractions.y,
     };
-}
-
-fn drawImageFill(
-    surface: *cairo.cairo_surface_t,
-    cr: *cairo.cairo_t,
-    width: f64,
-    height: f64,
-    alpha: f64,
-) void {
-    const image_w = cairo.cairo_image_surface_get_width(surface);
-    const image_h = cairo.cairo_image_surface_get_height(surface);
-    if (image_w <= 0 or image_h <= 0) return;
-
-    const iw: f64 = @floatFromInt(image_w);
-    const ih: f64 = @floatFromInt(image_h);
-    const scale = @max(width / iw, height / ih);
-
-    cairo.cairo_save(cr);
-    cairo.cairo_translate(cr, (width - iw * scale) / 2.0, (height - ih * scale) / 2.0);
-    cairo.cairo_scale(cr, scale, scale);
-    cairo.cairo_set_source_surface(cr, surface, 0.0, 0.0);
-    if (cairo.cairo_get_source(cr)) |pattern| {
-        cairo.cairo_pattern_set_filter(pattern, cairo.FILTER_BILINEAR);
-    }
-    cairo.cairo_paint_with_alpha(cr, alpha);
-    cairo.cairo_restore(cr);
 }
 
 fn drawBackground(
