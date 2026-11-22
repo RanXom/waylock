@@ -57,12 +57,6 @@ fn drawBox(theme: *const Theme, cr: *cairo.cairo_t, params: Params, alpha: f64) 
     const x = pos.x;
     const y = pos.y;
 
-    // Outer hairline, matching the theme reference's faint double border.
-    cairo.cairo_set_line_width(cr, 1.0);
-    cairo.cairo_set_source_rgba(cr, theme.text_color.r, theme.text_color.g, theme.text_color.b, 0.25 * alpha);
-    roundedRect(cr, x - 2.0, y - 2.0, box_w + 4.0, box_h + 4.0, theme.border_radius);
-    cairo.cairo_stroke(cr);
-
     // Translucent field.
     cairo.cairo_set_source_rgba(
         cr,
