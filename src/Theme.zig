@@ -92,6 +92,7 @@ pub const default_outline = Rgba{ .r = 0.55, .g = 0.55, .b = 0.62 };
 
 loaded: bool = false,
 background_image: ?[]u8 = null,
+transition_image: ?[]u8 = null,
 background_color: Rgba = default_background,
 surface_color: Rgba = default_surface,
 surface_opacity: f64 = 0.80,
@@ -166,6 +167,9 @@ pub fn deinit(theme: *Theme, gpa: mem.Allocator) void {
     if (theme.background_image) |path| gpa.free(path);
     theme.background_image = null;
 
+    if (theme.transition_image) |path| gpa.free(path);
+    theme.transition_image = null;
+
     if (theme.font_family) |family| gpa.free(family);
     theme.font_family = null;
 
@@ -188,6 +192,9 @@ fn parseGlobalKey(theme: *Theme, gpa: mem.Allocator, key: []const u8, value: []c
     if (mem.eql(u8, key, "background_image")) {
         if (theme.background_image) |old| gpa.free(old);
         theme.background_image = gpa.dupe(u8, value) catch null;
+    } else if (mem.eql(u8, key, "transition_image")) {
+        if (theme.transition_image) |old| gpa.free(old);
+        theme.transition_image = gpa.dupe(u8, value) catch null;
     } else if (mem.eql(u8, key, "background_color")) {
         theme.background_color = parseColor(value, theme.background_color);
     } else if (mem.eql(u8, key, "surface_color")) {
